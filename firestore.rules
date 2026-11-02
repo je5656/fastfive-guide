@@ -1,0 +1,58 @@
+rules_version = '2';
+// FASTFIVE 멤버 가이드 — Firestore 보안 규칙
+// · 누구나 읽기 가능 (입주 멤버가 로그인 없이 가이드를 봐요)
+// · 쓰기는 회사 구글 계정(@fastfive.co.kr)만
+//   - 전체 관리자(admins 컬렉션에 이메일이 있는 사람): 모든 내용
+//   - 지점 담당자(branchEditors/{지점ID}.emails 에 있는 사람): 자기 지점 내용만
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function staff() {
+      return request.auth != null
+        && request.auth.token.email_verified == true
+        && request.auth.token.email.matches('.*@fastfive[.]co[.]kr$');
+    }
+    function isAdmin() {
+      return staff() && exists(/databases/$(database)/documents/admins/$(request.auth.token.email.lower()));
+    }
+    function isEditor(b) {
+      return staff() && b != '_common'
+        && exists(/databases/$(database)/documents/branchEditors/$(b))
+        && request.auth.token.email.lower() in get(/databases/$(database)/documents/branchEditors/$(b)).data.emails;
+    }
+
+    match /config/{doc}      { allow read: if true; allow write: if isAdmin(); }
+    match /categories/{id}   { allow read: if true; allow write: if isAdmin(); }
+
+    match /branches/{b} {
+      allow read: if true;
+      allow create, delete: if isAdmin();
+      allow update: if isAdmin() || isEditor(b);
+    }
+
+    match /articles/{id} {
+      allow read: if true;
+      allow create: if isAdmin() || isEditor(request.resource.data.branch);
+      allow update: if isAdmin() || (isEditor(resource.data.branch) && request.resource.data.branch == resource.data.branch);
+      allow delete: if isAdmin() || isEditor(resource.data.branch);
+    }
+
+    match /faqs/{id} {
+      allow read: if true;
+      allow create: if isAdmin() || isEditor(request.resource.data.branch);
+      allow update: if isAdmin() || (isEditor(resource.data.branch) && request.resource.data.branch == resource.data.branch);
+      allow delete: if isAdmin() || isEditor(resource.data.branch);
+    }
+
+    // 지점 OT 슬라이드 파일 (쪽마다 이미지 1개, 문서 ID = 지점ID__번호)
+    match /otPages/{id} {
+      allow read: if true;
+      allow create: if (isAdmin() || isEditor(request.resource.data.branch)) && id.matches(request.resource.data.branch + '__[0-9]+');
+      allow update: if isAdmin() || (isEditor(resource.data.branch) && request.resource.data.branch == resource.data.branch);
+      allow delete: if isAdmin() || isEditor(resource.data.branch);
+    }
+
+    match /branchEditors/{b} { allow read: if staff(); allow write: if isAdmin(); }
+    match /admins/{email}    { allow read: if staff(); allow write: if isAdmin(); }
+  }
+}
